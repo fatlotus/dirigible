@@ -1,0 +1,224 @@
+## The Status Quo
+
+As of my current reading (likely several weeks out of date by the time this is read), there is a rough framework in place for how a spaceship seems to work. There are several primary services that must run inside onboard a ship to maintain stasis; among them are navigation, life support, and automation. Depending on how Notch builds the game, certain segments of those groups may be implemented natively. However, it is unlikely that these three categories will change in future development.
+
+Each of these problems are heavily I/O intensive and are massively parallel. Each of these three broad categories cannot preclude the other two in normal operation or while compromised. It is commonly suggested that the game will have support for worms and trojan horses, so the latter represents a very real threat. If radar is compromised, say, then the malicious code must be contained to prevent damage to other critical systems. Thus, an adequate security framework must be developed for even routine operation.
+
+## Securing DCPU Applications
+
+As it is currently defined, DCPU has several modes for privilege escalation and attack.
+
+- **A lack of hardware memory protection.** This means that individual applications, when run directly on the processor, can modify both program memory and data. As there is no hardware MMU, every program effectively shared the privileges of any other, because it can inject itself into the executable portion of RAM. Especially considering that I/O will likely be memory-mapped, the possibility that rogue programs will be able to modify arbitrary memory is very worrying.
+- **There are no hardware interrupts.** This means that each process can run indefinitely. Similarly, if a process fails (i.e. falls into an infinite loop, for example), it will halt the entire operating system. For the same reason, there is no support for hardware timers, so existing time-slicing algorithms cannot accurately measure the elapsed time in userland.
+- **No support for ring security.** In traditional processors, certain processor modes are denoted as having fewer privileges and access to I/O devices and memory. This is often combined with hardware virtualization technologies such as AMD-v or VT-x. Note that it may be possible to separate untrusted code into a separate physical computer which is then controlled by a trusted intermediary. Notch has suggested, however, that ships may only have two to three processors, so an extra processor totally dedicated to power management may be overly wasteful.
+
+Though DCPU is still in the works, Notch has suggested that none of these features are in the pipeline. Unfortunately, many of these features are ones that are easily implemented in software without complete emulation, at least using traditional techniques.
+
+### Processor Paravirtualization
+
+In traditional architectures, ring security grants additional privilege to the program that is launched first on the CPU, which then limits the process of later processes. In essence, emulation solves this problem by maintaining an entire virtual processor on top of the physical architecture. Instead of complete emulation of the host processor, I propose a different mechanism: one by which segmentation and interrupts are added dynamically at executable load-time. This method is best shown by an example.
+
+Suppose we take the canonical example created by Notch in the DCPU specification:
+
+	; Try some basic stuff
+	   SET A, 0x30
+	   SET [0x1000], 0x20
+	   SUB A, [0x1000]
+	   IFN A, 0x10
+	    SET PC, crash
+	
+	; Do a loopy thing
+	   SET I, 10
+	   SET A, 0x2000
+	:loop
+	   SET [0x2000+I], [A]
+	   SUB I, 1
+	   IFN I, 0
+	    SET PC, loop
+	
+	; Call a subroutine
+	   SET X, 0x4
+	   JSR testsub
+	   SET PC, crash
+	
+	:testsub
+	   SHL X, 4
+	   SET PC, POP
+	
+	; Hang forever. X should now be 0x40 if everything went right.
+	:crash
+	   SET PC, crash
+
+Though this program is innocuous, it is, by default, given privileges over the entire computer. Here are a few modifications that can be performed to optimize security and overall processing power.
+
+First, we need to limit memory accesses to a limited region of memory: call it an `L`-word (`2L`-byte) segment starting at some address `P`. The best way to do this is to adjust constant memory writes and reads to refer to values within that range, and to automatically wrap dynamic writes to within that range. In this example, let's define `P = 0xA000` and `L = 0x4000.`
+
+	   ...
+	   SET A, 0x30
+	   SET [0xB000], 0x20
+	   SUB A, [0xB000]
+	   IFN A, 0x10
+	   ...
+	   SET A, 0xC000
+	:loop
+	   SET [0xC000+I], [A]
+	   SUB I, 1
+	   ...
+
+There's an error here. Do you see what it is? What happens if I is greater than L? Let's fix this error:
+
+	   ...
+	   SET A, 0xC000
+	:loop
+	   SET [0x02], [0xC000+I]
+	   MOD [0x02], 0x4000
+	   SET [0x03], [0xA000+A]
+	   SET [0x02], [0x03]
+	   SUB I, 1
+	   ...
+
+But this approach creates its own problems. It seriously impairs array writes (since it is effectively adding run-time array bounds checking) and hammers the `O` register. (It also could be optimized from a MOD to a AND, if L is a power of two, as it is in this case, meaning that it could be replaced with `AND [0xA003], 0x3FFF`) For a fully watertight implementation, we may need to adjust it to the following:
+
+	   ...
+	   SET A, 0x2000
+	:loop
+	   SET [0x01], O
+	   SET [0x02], [0xC000+I]
+	   MOD [0x02], 0x4000
+	   SET [0x03], [0xA000+A]
+	   SET [0x02], [0x03]
+	   SET O, [0xA001]
+	   SUB I, 1
+	   ...
+
+Unfortunately, this requires another two instructions! Since this is fairly rare, an intelligent implementation could look ahead and determine if O is read back later, meaning that it can safely be used without fear of information leakage. (That future read from O could also be replaced to a lookup of [0xA001] in memory, saving another instruction.)
+
+This loop has another problem, however. If, for whatever reason, it fails to terminate, then the system will hang and the computer will never exit the loop. To resolve this, we need to rewrite the jump (really, a write to the PC register!) to call the scheduler:
+
+	   ...
+	   SUB A, [0x1000]
+	   SET [0x04], crash
+	   IFN A, 0x10
+	    SET PC, jmp_patcher
+	   ...
+	:loop
+	   ...
+	   SET [0x04], loop
+	   IFN I, 0
+	    SET PC, jmp_patcher
+		
+	; Call a subroutine
+	   SET X, 0x4
+	   SET [0x04], testsub
+	   SET [0x05], PC
+	   SET PC, jsr_patcher
+	   SET PC, crash
+	   
+	:testsub
+	   SHL X, 4
+	   SET PC, ret_patcher
+	   ...
+	:crash
+	   SET [0x04], crash
+	   SET PC, jmp_patcher
+	   ...
+	:jmp_patcher
+	   ; call scheduler.
+	   SET PC, [0x04]
+	:jsr_patcher
+	   ; call scheduler.
+	   SET PUSH, [0x05]
+	   ADD PEEK, 1
+	   SET PC, [0x04]
+	:ret_patcher
+	   SET PC, POP
+	   ...
+
+But wait! There's another problem with this implementation. Though the Operating System is "woken up" periodically, it still cannot keep track of the current CPU timer. Naturally, this can again be solved with a few tweaks and writes to memory:
+
+	   ...
+	   SUB A, [0x1000]
+	   SET [0x04], crash
+	   SET [0x05], PC
+	   IFN A, 0x10
+	    SET PC, jmp_patcher
+	   ...
+	   SET [0x04], loop
+	   SET [0x05], PC
+	   IFN I, 0
+	    SET PC, jmp_patcher
+	   ...
+	:crash
+	   SET [0x04], crash
+	   SET [0x05], PC
+	   SET PC, jmp_patcher
+	   ...
+	:jmp_patcher
+	   SUB [0x05], [0x06]
+	   ; call scheduler with time-delta = [0x05] + 2
+	   SET [0xA006], [0x04]
+	   SET PC, [0x04]
+	:jsr_patcher
+	   SET PUSH, 0x05
+	   ADD PEEK, 1
+	   SUB [0x05], [0x06]
+	   ; call scheduler with time-delta = [0x05] + 2
+	   SET [0x06], [0x04]
+	   SET PC, [0x04]
+	:ret_patcher
+	   SET PC, POP
+
+So what have we accomplished? We've slowed down this example program significantly. Normally the program takes 78 cycles to execute (with 76% of the cycles being inside the dense loop), and our modified variant takes 234 cycles, at almost a four to one ratio. In the same vein, the secured code requires a great deal more cycles for array accesses and jumps, so the loop now requires 85% of the total execution time.
+
+There are other optimizations that can be had, however. If we decrease the number of jumps necessary in the loop by performing what is often termed "loop unrolling," tight jumps can be made significantly more efficient. If, for example, we replace the loop with the following, then
+
+	; Do a loopy thing
+	   SET I, 10
+	   SET A, 0x2000
+	:loop
+	   SET [0x02], [0xC000+I]
+	   AND [0x02], 0x3FFF
+	   SET [0x03], [0xA000+A]
+	   SET [0x02], [0x03]
+	   SUB I, 1
+	   IFE I, 0
+	    SET PC, done
+	   ...
+	   SET [0x02], [0xC000+I]
+	   AND [0x02], 0x3FFF
+	   SET [0x03], [0xA000+A]
+	   SET [0x02], [0x03]
+	   SUB I, 1
+	   SET [0x04], loop
+	   SET [0x05], PC
+	   IFN I, 0
+	    SET PC, jmp_patcher
+	:done
+	   ...
+
+This sort of optimization saves eight cycles per pass. Especially in a tight loop like this one, this technique can have significant savings. Assuming that the code is unrolled five times, the cycle count for the loop decreases by 30%. Even unrolling twice has its benefits, resulting in a 5% cycle savings. When unrolling five times, the overall cycle count decreases to 2.2 times the original source execution length, further increasing run-time efficiency.
+
+There are other problems with this code, however. In our security model, the code is translated before being run. This means that the program cannot be allowed to access or execute its contents. Besides the complexity of a static jump table, we must prevent dynamic jumps and must ensure that stack addresses aren't modified by the implementation or are looked up statically.
+
+This suggests another security feature for our generic implementation. To ensure that the software doesn't attack the container by executing code that is misaligned with the command execution boundary (this has been the subject of several prototypial attacks in the past), we may need to define a static jump table that densely stores all possible labels from the source binary.
+
+There is another problem with the security model, as it stands. Currently, the operating system is incapable of virtual addressing, meaning that memory must be allocated statically at program initialization and execution. To fix this new problem, memory accesses must be converted from a single cyclic group to an entire addressing table, as follows, so that, for example, `SET A, [X]` becomes:
+
+	SET I, X
+	SET J, X
+	SHR J, 0x0a
+	AND I, 0x03ff
+	ADD I, [0x5000 + J]
+	SET A, [I]
+
+Naturally, this is only a cursory sketch of what would be required; as above, this should include virtual registers instead of `I` and `J`, and it should also store the overflow register externally. Likewise, special consideration should be given to unallocated segments: should they immediately crash the program (slower and more secure) or should they map to an existing segment. Either way requires great consideration with regard to virtual I/O and static memory.
+
+Both of these resolutions -- a jump table and paging -- have several profound memory layout consequences. This means that we effectively need five ranges of memory:
+
+* **Security-specific registers.** These values, denoted above as low-memory locations (`< 0x1f`) do not need to be per-process (since they surround context switches) but cannot be read or written from by the program.
+* **Translated program source.** The operating system must naturally store the secured code in memory, at an offset that cannot be accessed by the user program. This region is per-thread, and needs to be updated whenever the size of memory is increased. The end of this segment must be delimited by two jumps, to prevent execution leakage and bounds, respectively.
+* **Jump table.** This table contains a static mapping of arbitrary indices to actual program locations, and is used to prevent stack return address attacks. Naturally, this segment must be read-only, and bounds checking must be enforced.
+* **Memory-management table.** This table should be fairly dense, and, for optimizations' sake, should be sized at a power of two. Likewise, this table is only accessible from within the generated code.
+* **Original program source.** This code should be accessible by the host program (read and write, for statically-allocated memory locations) so it should be placed within the sandbox.
+
+Including all of these segments and patches poses significant overhead for operating systems development, but all of them are necessary. If a single unchecked memory access is performed, the emulated program is effectively given complete access to memory, I/O, and user data.
