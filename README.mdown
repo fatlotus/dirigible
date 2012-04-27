@@ -12,13 +12,13 @@ As it is currently defined, DCPU has several modes for privilege escalation and 
 - **There are no hardware interrupts.** This means that each process can run indefinitely. Similarly, if a process fails (i.e. falls into an infinite loop, for example), it will halt the entire operating system. For the same reason, there is no support for hardware timers, so existing time-slicing algorithms cannot accurately measure the elapsed time in userland.
 - **No support for ring security.** In traditional processors, certain processor modes are denoted as having fewer privileges and access to I/O devices and memory. This is often combined with hardware virtualization technologies such as AMD-v or VT-x. Note that it may be possible to separate untrusted code into a separate physical computer which is then controlled by a trusted intermediary. Notch has suggested, however, that ships may only have two to three processors, so an extra processor totally dedicated to power management may be overly wasteful.
 
-Though DCPU is still in the works, Notch has suggested that none of these features are in the pipeline. Unfortunately, many of these features are ones that are easily implemented in software without complete emulation, at least using traditional techniques.
+Though DCPU is still in the works, Notch has suggested that none of these features are in the pipeline. Unfortunately, none of these features are ones that are easily implemented in software without complete emulation, at least using traditional techniques.
 
 ### Processor Paravirtualization
 
 In traditional architectures, ring security grants additional privilege to the program that is launched first on the CPU, which then limits the process of later processes. In essence, emulation solves this problem by maintaining an entire virtual processor on top of the physical architecture. Instead of complete emulation of the host processor, I propose a different mechanism: one by which segmentation and interrupts are added dynamically at executable load-time. This method is best shown by an example.
 
-Suppose we take the canonical example created by Notch in the DCPU specification:
+Suppose we take the canonical program written by Notch in the DCPU specification:
 
 	; Try some basic stuff
 	   SET A, 0x30
@@ -49,7 +49,7 @@ Suppose we take the canonical example created by Notch in the DCPU specification
 	:crash
 	   SET PC, crash
 
-Though this program is innocuous, it is, by default, given privileges over the entire computer. Here are a few modifications that can be performed to optimize security and overall processing power.
+Though this program is innocuous, it is, by default, given privileges over the entire computer. Here are a few modifications that can be performed to optimize security and prevent system hangs.
 
 First, we need to limit memory accesses to a limited region of memory: call it an `L`-word (`2L`-byte) segment starting at some address `P`. The best way to do this is to adjust constant memory writes and reads to refer to values within that range, and to automatically wrap dynamic writes to within that range. In this example, let's define `P = 0xA000` and `L = 0x4000.`
 
