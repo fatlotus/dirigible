@@ -87,11 +87,11 @@ But this approach creates its own problems. It seriously impairs array writes (s
 	   MOD [0x02], 0x4000
 	   SET [0x03], [0xA000+A]
 	   SET [0x02], [0x03]
-	   SET O, [0xA001]
+	   SET O, [0x01]
 	   SUB I, 1
 	   ...
 
-Unfortunately, this requires another two instructions! Since this is fairly rare, an intelligent implementation could look ahead and determine if O is read back later, meaning that it can safely be used without fear of information leakage. (That future read from O could also be replaced to a lookup of [0xA001] in memory, saving another instruction.)
+Unfortunately, this requires another two instructions! Since this is fairly rare, an intelligent implementation could look ahead and determine if O is read back later, meaning that it can safely be used without fear of information leakage. (That future read from `O` could also be replaced to a lookup of `[0x01]` in memory, saving another instruction.)
 
 This loop has another problem, however. If, for whatever reason, it fails to terminate, then the system will hang and the computer will never exit the loop. To resolve this, we need to rewrite the jump (really, a write to the PC register!) to call the scheduler:
 
