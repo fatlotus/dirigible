@@ -1,4 +1,8 @@
+# Dirigible Security
+
 ## The Status Quo
+
+Recently, Notch (the creator of Minecraft) released information about his latest game. Called "0x10^c" in reference to a bit order mistake, the game features the fashion and 16-bit CPU of the nineteen eighties. Since the game is an MMO ("Massively Multiplayer Online role playing game"), those computers will run continuously, making them vulnerable to attack.
 
 As of my current reading (likely several weeks out of date by the time this is read), there is a rough framework in place for how a spaceship seems to work. There are several primary services that must run inside onboard a ship to maintain stasis; among them are navigation, life support, and automation. Depending on how Notch builds the game, certain segments of those groups may be implemented natively. However, it is unlikely that these three categories will change in future development.
 
