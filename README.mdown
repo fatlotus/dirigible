@@ -226,3 +226,9 @@ Both of these resolutions -- a jump table and paging -- have several profound me
 * **Original program source.** This code should be accessible by the host program (read and write, for statically-allocated memory locations) so it should be placed within the sandbox.
 
 Including all of these segments and patches poses significant overhead for operating systems development, but all of them are necessary. If a single unchecked memory access is performed, the emulated program is effectively given complete access to memory, I/O, and user data.
+
+## Colophon
+
+Is this overhead worth it? In the context of a broader operating system, however, paravirtualization provides a number of benefits. It allows for memory protection and automatic process introspection, and helps isolate code into segmented and secured processes. Paravirtualization also allows the operating system a great deal of flexibility in how it is implemented, as, unlike traditional methods, it doesn't require program compliance in multithreading protocols.
+
+These advantages would seem to justify the additional overhead of static recompilation and processing. Perhaps most importantly, this report stands as an open invitation to the DCPU Unofficial Standards Comittee for further study into DCPU-16 based security frameworks.
